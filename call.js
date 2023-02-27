@@ -13,13 +13,18 @@ let loginButton
 let callNumberInput
 let answerButton
 let logOutButton
-let callPanel
 let callButton
 let hangUpButton
 let socket
 let ua
 let session
 let stream
+let displayStateController
+let holdButton
+let unHoldButton
+let muteButton
+let unMuteButton
+let referButton
 
 
 function initial() {
@@ -31,10 +36,15 @@ function initial() {
     loginButton = $("#loginButton")
     callNumberInput = $("#callNumberText")
     logOutButton = $("#logOutButton")
-    callPanel = $("#callPanel")
     callButton = $('#callNumberButton')
     answerButton = $('#answerButton')
     hangUpButton = $('#hangUpButton')
+    holdButton = $('#holdButton')
+    unHoldButton = $('#unHoldButton')
+    muteButton = $('#muteButton')
+    unMuteButton = $('#unMuteButton')
+    referButton = $('#referButton')
+
 
     // если в локальном хранилище есть данные прошлых сессий, производим автозаполнение
     loginInput.val(localStorage.getItem(loginAlias))
@@ -47,9 +57,119 @@ function initial() {
     callButton.click(call)
     hangUpButton.click(hangUp)
     answerButton.click(answer)
+    holdButton.click(hold)
+    unHoldButton.click(unhold)
+    muteButton.click(mute)
+    unMuteButton.click(unmute)
+    referButton.click(refer)
 
     // подготовка отображения к работе
-    logoutSuccess()
+    displayStateController = new DisplayStateController()
+    displayStateController.setState(displayStateController.logoutState)
+}
+
+
+class DisplayStateController {
+    logoutState = new LogoutState(this)
+    waitState = new WaitState(this)
+    registerState = new RegisterState(this)
+    outGoingCallProgressState = new OutGoingCallProgressState(this)
+    incomingCallProgressState = new IncomingCallProgressState(this)
+    callAcceptedState = new CallAcceptedState(this)
+    callHoldState = new CallHoldState(this)
+    callMuteState = new CallMuteState(this)
+    callEndedState = new CallEndedState(this)
+    state
+
+    constructor() {
+        [
+            loginInput,
+            passwordInput,
+            loginButton,
+            callNumberInput,
+            logOutButton,
+            callButton,
+            answerButton,
+            hangUpButton,
+            holdButton,
+            unHoldButton,
+            muteButton,
+            unMuteButton,
+            referButton,
+        ].forEach(item => item.hide())
+    }
+
+    setState(state) {
+        if (this.state) this.state.deactivate()
+        this.state = state
+        this.state.activate()
+    }
+}
+
+
+class DisplayState {
+    displayItems
+
+    constructor(controller) {
+        this.constructor = controller
+    }
+
+    activate() {
+        this.displayItems.forEach(item => {
+            item.show()
+        })
+    }
+
+    deactivate() {
+        this.displayItems.forEach(item => {
+            item.hide()
+        })
+    }
+}
+
+
+class LogoutState extends DisplayState {
+    displayItems = [loginInput, passwordInput, loginButton]
+}
+
+
+class WaitState extends DisplayState {
+
+}
+
+
+class RegisterState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, callButton]
+}
+
+
+class OutGoingCallProgressState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, hangUpButton]
+}
+
+
+class CallAcceptedState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, hangUpButton, holdButton, muteButton, referButton]
+}
+
+
+class CallHoldState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, hangUpButton, unHoldButton, referButton]
+}
+
+
+class CallMuteState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, hangUpButton, unMuteButton, referButton]
+}
+
+
+class IncomingCallProgressState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, answerButton, hangUpButton]
+}
+
+
+class CallEndedState extends DisplayState {
+    displayItems = [logOutButton, callNumberInput, callButton ]
 }
 
 
@@ -67,61 +187,14 @@ function login() {
         })
     ua.start()
 
-    ua.on('registered', loginSuccess)
-    ua.on('unregistered', logoutSuccess)
-    ua.on('registrationFailed', loginFail)
+    ua.on('registered', () => displayStateController.setState(displayStateController.registerState))
+    ua.on('unregistered', () => displayStateController.setState(displayStateController.logoutState))
     ua.on('newRTCSession', dispatchCall)
 }
 
 
 function logout() {
     ua.stop()
-}
-
-
-function loginSuccess() {
-    loginButton.hide()
-    logOutButton.show()
-    loginInput.attr('disabled', true)
-    passwordInput.attr('disabled', true)
-    callPanel.show()
-    answerButton.hide()
-    hangUpButton.hide()
-}
-
-
-function loginFail(data) {
-    console.error("UA registrationFailed", data.cause)
-}
-
-
-function logoutSuccess() {
-    loginButton.show()
-    logOutButton.hide()
-    loginInput.attr('disabled', false)
-    passwordInput.attr('disabled', false)
-    callPanel.hide()
-}
-
-
-function callStart() {
-    callButton.hide()
-    hangUpButton.show()
-}
-
-
-function callEnd() {
-    hangUpButton.hide()
-    callButton.show()
-    answerButton.hide()
-
-}
-
-
-function incomingCall() {
-    callButton.hide()
-    answerButton.show()
-    hangUpButton.show()
 }
 
 
@@ -148,7 +221,6 @@ function call() {
 
 
 function dispatchCall(data) {
-    callStart()
     localStorage.setItem(callNumberAlias, callNumberInput.val())
     session = data.session
     switch (data.originator) {
@@ -159,13 +231,42 @@ function dispatchCall(data) {
             outgoingCall(data)
             break
     }
+    session.on('hold', () => displayStateController.setState(displayStateController.callHoldState))
+    session.on('unhold', () => displayStateController.setState(displayStateController.callAcceptedState))
+    session.on('muted', () => displayStateController.setState(displayStateController.callMuteState))
+    session.on('unmuted', () => displayStateController.setState(displayStateController.callAcceptedState))
+    // session.on('refer', (e) => {
+    //     console.log('------------------refer---------------------')
+    //     console.log(e)
+    //
+    // })
+    // session.on('reinvite', (e) => {
+    //     console.log('------------------reinvite---------------------')
+    //     console.log(e)
+    //     // displayStateController.setState(displayStateController.registerState)
+    // })
+    // session.on('replaces', (e) => {
+    //     console.log('------------------replaces---------------------')
+    //     console.log(e)
+    //     // displayStateController.setState(displayStateController.registerState)
+    // })
+}
+
+
+function answer() {
+    session.answer({
+        mediaConstraints: {
+            audio: true,
+            video: false
+        }
+    })
 }
 
 
 function incomeCall(data) {
     session.on('progress', () => {
+        displayStateController.setState(displayStateController.incomingCallProgressState)
         playSound("ringing.ogg", true)
-        incomingCall()
     })
     session.on('connecting', () => {
         let reseivers = session.connection.getReceivers()
@@ -176,23 +277,15 @@ function incomeCall(data) {
     })
     session.on('accepted', () => {
         stopSound("ringing.ogg")
-        answerButton.hide()
+        displayStateController.setState(displayStateController.callAcceptedState)
     })
     session.on('failed', () => {
         stopSound("ringing.ogg")
         playSound("rejected.mp3", false)
-        callEnd()
+        displayStateController.setState(displayStateController.registerState)
     })
-    session.on('ended', callEnd)
-}
-
-
-function answer() {
-    session.answer({
-        mediaConstraints: {
-            audio: true,
-            video: false
-        }
+    session.on('ended', () => {
+        displayStateController.setState(displayStateController.callEndedState)
     })
 }
 
@@ -210,6 +303,7 @@ function outgoingCall(data) {
 
 
     session.on('connecting', () => {
+        displayStateController.setState(displayStateController.outGoingCallProgressState)
         stream = new MediaStream()
         session.connection.addEventListener('track', (e) => {
             stream.addTrack(e.track)
@@ -221,19 +315,42 @@ function outgoingCall(data) {
         playSound("ringback.ogg", true)
     })
     session.on('accepted', () => {
+        displayStateController.setState(displayStateController.callAcceptedState)
         stopSound("ringback.ogg")
     })
     session.on('failed', () => {
         stopSound("ringback.ogg")
         playSound("rejected.mp3", false)
-        callEnd()
+        displayStateController.setState(displayStateController.registerState)
     })
-    session.on('ended', callEnd)
+    session.on('ended', () => {
+        displayStateController.setState(displayStateController.callEndedState)
+    })
 }
 
 
 function hangUp() {
     session.terminate()
+}
+
+function hold() {
+    session.hold()
+}
+
+function unhold() {
+    session.unhold()
+}
+
+function mute() {
+    session.mute()
+}
+
+function unmute() {
+    session.unmute()
+}
+
+function refer() {
+    session.refer(callNumberInput.val())
 }
 
 
