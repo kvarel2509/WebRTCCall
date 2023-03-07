@@ -28,7 +28,7 @@ let referButton
 let callNumberAddButton
 
 
-class Session {
+class SessionItem {
     session
     sessionNode
 
@@ -62,6 +62,7 @@ class SessionController {
     sessionStorage
     nodeController
 
+
     constructor(
         sessionStorage= new SessionStorage(),
         nodeController = new NodeController()
@@ -78,6 +79,10 @@ class SessionController {
 
     outGoingSessionHandle(session) {
 
+    }
+
+    getSessionItem(session) {
+        return new SessionItem(session)
     }
 }
 
