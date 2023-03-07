@@ -15,8 +15,8 @@ let answerButton
 let logOutButton
 let callButton
 let hangUpButton
-let socket
 let ua
+let sessions
 let session
 let stream
 let displayStateController
@@ -25,6 +25,82 @@ let unHoldButton
 let muteButton
 let unMuteButton
 let referButton
+let callNumberAddButton
+
+
+class Session {
+    session
+    sessionNode
+
+    constructor(session, sessionNode) {
+        this.session = session
+        this.sessionNode = sessionNode
+    }
+}
+
+
+// хранилище экземпляров Session
+class SessionStorage {
+    sessions = []
+
+    addSession(session) {
+        this.sessions.push(session)
+    }
+    removeSession(ind) {
+        this.sessions.splice(ind, 1)
+    }
+    getIndSession(session) {
+        this.sessions.indexOf(session)
+    }
+    getAllSessions() {
+        return this.sessions
+    }
+}
+
+
+class SessionController {
+    sessionStorage
+    nodeController
+
+    constructor(
+        sessionStorage= new SessionStorage(),
+        nodeController = new NodeController()
+    ) {
+        this.sessionStorage = sessionStorage
+        this.nodeController = nodeController
+    }
+
+    incomingSessionHandle(session) {
+        this.sessionStorage.addSession()
+        this.nodeController.addSessionNode()
+
+    }
+
+    outGoingSessionHandle(session) {
+
+    }
+}
+
+
+class NodeCreator {
+    createSessionNode(session) {
+
+    }
+}
+
+
+class NodeController {
+    nodeCreator
+
+    constructor(nodeCreator=new NodeCreator()) {
+        this.nodeCreator = nodeCreator
+    }
+
+    addSessionNode(session) {
+        let sessionNode = this.nodeCreator.createSessionNode(session)
+        // добавить ее на страницу
+    }
+}
 
 
 function initial() {
@@ -44,6 +120,7 @@ function initial() {
     muteButton = $('#muteButton')
     unMuteButton = $('#unMuteButton')
     referButton = $('#referButton')
+    callNumberAddButton = $('#callNumberAddButton')
 
 
     // если в локальном хранилище есть данные прошлых сессий, производим автозаполнение
@@ -62,6 +139,7 @@ function initial() {
     muteButton.click(mute)
     unMuteButton.click(unmute)
     referButton.click(refer)
+    callNumberAddButton.click(callAdd)
 
     // подготовка отображения к работе
     displayStateController = new DisplayStateController()
@@ -96,6 +174,7 @@ class DisplayStateController {
             muteButton,
             unMuteButton,
             referButton,
+            callNumberAddButton,
         ].forEach(item => item.hide())
     }
 
@@ -149,17 +228,17 @@ class OutGoingCallProgressState extends DisplayState {
 
 
 class CallAcceptedState extends DisplayState {
-    displayItems = [logOutButton, callNumberInput, hangUpButton, holdButton, muteButton, referButton]
+    displayItems = [logOutButton, callNumberInput, callButton, hangUpButton, holdButton, muteButton, referButton, callNumberAddButton]
 }
 
 
 class CallHoldState extends DisplayState {
-    displayItems = [logOutButton, callNumberInput, hangUpButton, unHoldButton, referButton]
+    displayItems = [logOutButton, callNumberInput, hangUpButton, unHoldButton, referButton, callNumberAddButton]
 }
 
 
 class CallMuteState extends DisplayState {
-    displayItems = [logOutButton, callNumberInput, hangUpButton, unMuteButton, referButton]
+    displayItems = [logOutButton, callNumberInput, hangUpButton, unMuteButton, referButton, callNumberAddButton]
 }
 
 
@@ -177,29 +256,40 @@ function login() {
     localStorage.setItem(loginAlias, loginInput.val())
     localStorage.setItem(passwordAlias, passwordInput.val())
 
-    socket = new JsSIP.WebSocketInterface(`wss://${SERVER}:${PORT}/ws`)
-    ua = new JsSIP.UA(
-        {
-            uri: `sip:${loginInput.val()}@${SERVER}`,
-            password: passwordInput.val(),
-            display_name: loginInput.val(),
-            sockets: [socket]
-        })
+    let serverUrl = `wss://${SERVER}:${PORT}/ws`
+    let localURI = `sip:${loginInput.val()}@${SERVER}`
+
+    let socket = new JsSIP.WebSocketInterface(serverUrl)
+
+    ua = new JsSIP.UA({
+        uri: localURI,
+        password: passwordInput.val(),
+        display_name: loginInput.val(),
+        sockets: [socket]
+    })
+
     ua.start()
 
-    ua.on('registered', () => displayStateController.setState(displayStateController.registerState))
-    ua.on('unregistered', () => displayStateController.setState(displayStateController.logoutState))
+    ua.on('registered', () => {
+        sessions = new SessionStorage()
+        displayStateController.setState(displayStateController.registerState)
+    })
+    ua.on('unregistered', () => {
+        sessions = null
+        displayStateController.setState(displayStateController.logoutState)
+    })
     ua.on('newRTCSession', dispatchCall)
 }
 
 
 function logout() {
     ua.stop()
+    ua = null
 }
 
 
 function call() {
-    ua.call(callNumberInput.val(), {
+    options = {
         pcConfig:
             {
                 hackStripTcp: true, // Важно для хрома, чтоб он не тупил при звонке
@@ -215,14 +305,41 @@ function call() {
             {
                 offerToReceiveAudio: 1, // Принимаем только аудио
                 offerToReceiveVideo: 0
-            }
-    })
+            },
+    }
+
+    ua.call(callNumberInput.val(), options)
+}
+
+
+function callAdd() {
+    options = {
+        pcConfig:
+            {
+                hackStripTcp: true, // Важно для хрома, чтоб он не тупил при звонке
+                rtcpMuxPolicy: 'negotiate', // Важно для хрома, чтоб работал multiplexing. Эту штуку обязательно нужно включить на астере.
+                iceServers: []
+            },
+        mediaConstraints:
+            {
+                audio: true, // Поддерживаем только аудио
+                video: false
+            },
+        rtcOfferConstraints:
+            {
+                offerToReceiveAudio: 1, // Принимаем только аудио
+                offerToReceiveVideo: 0
+            },
+        mediaStream: remoteAudioControl.srcObject
+    }
+
+    ua.call(callNumberInput.val(), options)
 }
 
 
 function dispatchCall(data) {
-    localStorage.setItem(callNumberAlias, callNumberInput.val())
-    session = data.session
+    session.addSession(data.session)
+
     switch (data.originator) {
         case 'remote':
             incomeCall(data)
@@ -235,6 +352,11 @@ function dispatchCall(data) {
     session.on('unhold', () => displayStateController.setState(displayStateController.callAcceptedState))
     session.on('muted', () => displayStateController.setState(displayStateController.callMuteState))
     session.on('unmuted', () => displayStateController.setState(displayStateController.callAcceptedState))
+    session.on('reinvite', () => console.log('---------------------reinvite----------------------'))
+    session.on('refer', () => console.log('---------------------refer----------------------'))
+    session.on('replaces', () => console.log('---------------------refer----------------------'))
+
+
     // session.on('refer', (e) => {
     //     console.log('------------------refer---------------------')
     //     console.log(e)
@@ -305,6 +427,7 @@ function outgoingCall(data) {
     session.on('connecting', () => {
         displayStateController.setState(displayStateController.outGoingCallProgressState)
         stream = new MediaStream()
+        console.log(session)
         session.connection.addEventListener('track', (e) => {
             stream.addTrack(e.track)
             remoteAudioControl.srcObject = stream
@@ -350,7 +473,16 @@ function unmute() {
 }
 
 function refer() {
-    session.refer(callNumberInput.val())
+    let options = {
+        eventHandlers: {
+            'requestSucceeded': () => console.log('-------------------requestSucceeded--------------------'),
+            'requestFailed': () => console.log('-------------------requestFailed--------------------'),
+            'trying': () => console.log('-------------------trying--------------------'),
+            'progress': () => console.log('-------------------progress--------------------'),
+            'accepted': () => console.log('-------------------accepted--------------------'),
+        }
+    }
+    session.refer(callNumberInput.val(), options)
 }
 
 
